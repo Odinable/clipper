@@ -1,0 +1,14 @@
+# your reels, downloads and sign-in (never commit)
+out/
+vods/
+.account.json
+.appwindow/
+preview/
+__pycache__/
+*.pyc
+# build output
+packaging/build/
+packaging/dist/
+# secrets
+.env*
+*.pem

@@ -1,0 +1,7 @@
+numpy
+pillow
+imageio-ffmpeg
+yt-dlp
+cryptography
+# to build the installer:
+pyinstaller
