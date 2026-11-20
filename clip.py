@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 HERE = Path(__file__).resolve().parent
 NOWIN = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW: no console flashes from the app
 
@@ -128,23 +128,73 @@ def parse_time(s):
 
 # ---------------------------------------------------------------- input
 
-def fetch(url, workdir):
-    """Download a VOD (and its live chat replay, if any) with yt-dlp."""
+def _ytdlp(args):
+    """Run yt-dlp; returns (ok, last printed line, error text)."""
+    r = subprocess.run([*ytdlp_cmd(), "--encoding", "utf-8", "--ffmpeg-location", FF, "--no-progress", *args],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                       errors="replace", creationflags=NOWIN)
+    lines = r.stdout.strip().splitlines()
+    errs = [l for l in r.stderr.splitlines() if l.startswith("ERROR")]
+    return r.returncode == 0, (lines[-1] if lines else ""), (errs[-1] if errs else r.stderr.strip()[-300:])
+
+
+def _download_error(err):
+    if "No space left" in err or "Errno 28" in err:
+        return "Your drive is full. Free up some space and try again."
+    if "Private video" in err or "members-only" in err or "Sign in" in err:
+        return "That video is private or members-only, so it can't be downloaded."
+    if "is not a valid URL" in err or "Unsupported URL" in err:
+        return "That link isn't a YouTube or Twitch video."
+    return "Couldn't download that link. " + err.replace("ERROR: ", "")[:200]
+
+
+def fetch_audio(url, workdir):
+    """Download only the sound (plus the live chat replay, if any). A 6-hour stream is ~130 MB this way,
+    against ~10 GB for the full video; the video is then downloaded just around each highlight."""
     workdir.mkdir(parents=True, exist_ok=True)
     tmpl = str(workdir / "%(title).80s [%(id)s].%(ext)s")
-    cmd = [*ytdlp_cmd(), "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
-           "--merge-output-format", "mp4", "--write-subs", "--sub-langs", "live_chat",
-           "--ffmpeg-location", FF, "-o", tmpl, "--print", "after_move:filepath", url]
-    print("Downloading VOD with yt-dlp (this can take a while for long streams)...")
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, creationflags=NOWIN)
-    if r.returncode != 0:
-        # chat replay sometimes fails; retry without it
-        cmd = [c for c in cmd if c not in ("--write-subs", "--sub-langs", "live_chat")]
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, creationflags=NOWIN)
-        if r.returncode != 0:
-            raise RuntimeError("yt-dlp could not download that link.")
-    path = Path(r.stdout.strip().splitlines()[-1])
-    return path
+    base = ["-f", "139/249/ba[abr<=96]/wa/ba/b", "-o", tmpl, "--print", "after_move:filepath", url]
+    print("Downloading the stream's audio and chat...")
+    progress("downloading", 0.0)
+    ok, path, err = _ytdlp(["--write-subs", "--sub-langs", "live_chat", *base])
+    if not ok:  # the chat replay sometimes fails; retry without it
+        ok, path, err = _ytdlp(base)
+    if not ok or not path:
+        raise RuntimeError(_download_error(err))
+    return Path(path)
+
+
+SECTION_PAD = 20  # seconds downloaded either side of a clip, so it can be nudged later without downloading again
+
+
+def fetch_section(url, start, end, out):
+    """Download one stretch of the video at up to 1080p."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    for f in out.parent.glob(out.stem + ".*"):
+        f.unlink()
+    ok, path, err = _ytdlp(["-f", "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
+                            "--merge-output-format", "mp4", "--download-sections", f"*{start:.1f}-{end:.1f}",
+                            "-o", str(out.with_suffix(".%(ext)s")), "--print", "after_move:filepath", url])
+    if not ok or not path:
+        raise RuntimeError(_download_error(err))
+    return Path(path)
+
+
+def ensure_source(job, c, outdir):
+    """For a clip from a downloaded link, make sure its stretch of video is on disk and covers start..end."""
+    if not job.get("sections"):
+        return
+    have = c.get("src_range")
+    src = outdir / c["src"] if c.get("src") else None
+    if have and src and src.exists() and have[0] <= c["start"] and c["end"] <= have[1]:
+        return
+    s = max(0.0, c["start"] - SECTION_PAD)
+    e = min(job["duration"], c["end"] + SECTION_PAD)
+    f = fetch_section(job["url"], s, e, outdir / "source" / f"{c['id']:02d}")
+    c["src"], c["src_offset"], c["src_range"] = str(f.relative_to(outdir)), s, [s, e]
+    if not job.get("size_checked"):  # the audio-only download can't tell us the video size
+        _, job["width"], job["height"], _ = probe(f)
+        job["size_checked"] = True
 
 
 def probe(path):
@@ -464,7 +514,13 @@ def render(job, only=None):
         if only and c["id"] not in only:
             continue
         progress("cutting", (k - 1) / len(clips))
-        render_one(job, c, outdir, label=f"[{k}/{len(clips)}]")
+        try:
+            render_one(job, c, outdir, label=f"[{k}/{len(clips)}]")
+        except RuntimeError as e:  # one clip's download failing shouldn't lose the rest
+            print(f"  skipped clip {c['id']}: {e}")
+            c["keep"] = False
+    if clips and not any(c.get("files") for c in clips):
+        raise RuntimeError("None of the highlights could be cut. Check your connection and free space, then try again.")
     (outdir / "highlights.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
     write_review(job, outdir)
     write_timestamps(job, outdir)
@@ -474,6 +530,7 @@ def render(job, only=None):
 def render_one(job, c, outdir, label=""):
     """Cut one clip. Live clips carry their own source file (`src`, starting at stream time
     `src_offset`), so they can be re-cut after the stream's rolling buffer is gone."""
+    ensure_source(job, c, outdir)
     src_w, src_h = job["width"], job["height"]
     vod = Path(c["src"]) if c.get("src") else Path(job["vod"])
     if c.get("src") and not vod.is_absolute():
@@ -616,6 +673,11 @@ def build_parser():
 
 
 def main():
+    for st in (sys.stdout, sys.stderr):  # stream titles often have emoji; a Windows console can't print them
+        try:
+            st.reconfigure(errors="replace")
+        except Exception:
+            pass
     ap = build_parser()
     a = ap.parse_args()
 
@@ -636,7 +698,7 @@ def run_vod(a):
     url = None
     if re.match(r"https?://", a.input):
         url = a.input
-        vod = fetch(url, VODS)
+        vod = fetch_audio(url, VODS)
     else:
         vod = Path(a.input).expanduser().resolve()
         if not vod.exists():
@@ -679,7 +741,7 @@ def run_vod(a):
     outdir = Path(a.out) if a.out else REELS / re.sub(r"[^\w\- ]+", "", vod.stem)[:60].strip()
     job = {"vod": str(vod), "url": url, "outdir": str(outdir.resolve()), "duration": dur, "width": w, "height": h,
            "layout": a.layout, "cam": [int(v) for v in a.cam.split(",")], "wide": not a.no_wide,
-           "chip": a.chip, "signals": signals, "curve": curve, "clips": clips}
+           "chip": a.chip, "signals": signals, "curve": curve, "clips": clips, "sections": bool(url)}
     if a.find_only:
         outdir.mkdir(parents=True, exist_ok=True)
         (outdir / "highlights.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
@@ -688,6 +750,11 @@ def run_vod(a):
         return outdir
     print()
     render(job)
+    if url:  # the audio was only needed to find the moments; each clip has its own video now
+        try:
+            vod.unlink()
+        except OSError:
+            pass
     return outdir
 
 

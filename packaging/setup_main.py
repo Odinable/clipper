@@ -13,7 +13,7 @@ import threading
 import zipfile
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 APP = "Clipper"
 PUBLISHER = "Growthforge"
 INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "Programs" / APP

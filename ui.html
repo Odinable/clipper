@@ -463,13 +463,13 @@ async function poll() {
   $('#vodProg').hidden = !(V.running || V.stage === 'done' || V.stage === 'failed');
   $('#startVod').disabled = V.running;
   if (V.running || V.stage) {
-    const stages = { starting: 'Starting…', downloading: 'Downloading the stream…', listening: 'Listening for hype moments…', cutting: 'Cutting clips…', done: 'Done!', failed: 'Didn\'t work' };
+    const stages = { starting: 'Starting…', downloading: 'Downloading the stream's audio…', listening: 'Listening for hype moments…', cutting: 'Cutting clips…', done: 'Done!', failed: 'Didn\'t work' };
     $('#vodStage').textContent = stages[V.stage] || V.stage;
     const ind = V.stage === 'downloading' || V.stage === 'starting';
     $('#vodBar').classList.toggle('indet', ind && V.running);
     const pct = V.stage === 'listening' ? V.frac * 60 : V.stage === 'cutting' ? 60 + V.frac * 40 : V.stage === 'done' ? 100 : 0;
     $('#vodBar b').style.width = ind ? '' : pct + '%'; $('#vodPct').textContent = ind || !V.running ? '' : Math.round(pct) + '%';
-    $('#vodHint').textContent = V.stage === 'downloading' ? 'Long streams take a while to download.' : V.stage === 'done' ? 'Your clips are on the right.' : '';
+    $('#vodHint').textContent = V.stage === 'downloading' ? 'Only the sound is downloaded first, so even long streams are quick.' : V.stage === 'cutting' ? 'Downloading and cutting just the highlights.' : V.stage === 'done' ? 'Your clips are on the right.' : V.stage === 'failed' ? (s.error || '') : '';
     if (V.stage === 'done' && V.session && follow !== V.session && !V._seen) { follow = V.session; V._seen = true }
   }
   if (s.rev !== lastRev || follow !== cur) { lastRev = s.rev; await loadSessions(); await loadSession(false, L) }
