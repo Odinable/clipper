@@ -463,7 +463,7 @@ async function poll() {
   $('#vodProg').hidden = !(V.running || V.stage === 'done' || V.stage === 'failed');
   $('#startVod').disabled = V.running;
   if (V.running || V.stage) {
-    const stages = { starting: 'Starting…', downloading: 'Downloading the stream's audio…', listening: 'Listening for hype moments…', cutting: 'Cutting clips…', done: 'Done!', failed: 'Didn\'t work' };
+    const stages = { starting: 'Starting…', downloading: 'Downloading the stream’s audio…', listening: 'Listening for hype moments…', cutting: 'Cutting clips…', done: 'Done!', failed: 'Didn\'t work' };
     $('#vodStage').textContent = stages[V.stage] || V.stage;
     const ind = V.stage === 'downloading' || V.stage === 'starting';
     $('#vodBar').classList.toggle('indet', ind && V.running);
