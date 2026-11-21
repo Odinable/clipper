@@ -22,7 +22,7 @@ Clipper watches your live stream while you play. When you or your chat go off, i
 2. Windows may say *"Windows protected your PC"*, because Clipper isn't code-signed yet. Click **More info → Run anyway**.
 3. Open Clipper from the Start menu and sign in once with your name and email.
 
-Needs Windows 10 or 11. Reels are saved to **Videos\Clipper**. To uninstall: **Settings → Apps → Clipper → Uninstall** (your reels are kept).
+Needs Windows 10 or 11. The installer lets you pick the install folder, on any drive. Reels are saved to **Videos\Clipper**. To uninstall: **Settings → Apps → Clipper → Uninstall** (your reels are kept).
 
 ## How it picks moments
 
