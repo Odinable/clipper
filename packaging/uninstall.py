@@ -1,6 +1,6 @@
 """Removes Clipper: shortcuts, the Windows "installed apps" entry and the program folder.
 
-Your reels (Videos\\Clipper) are kept. Sign-in and window settings (AppData\\Local\\Clipper) are removed.
+Your reels (Videos\\Clipper, or the folder picked in the app) are kept. Sign-in and window settings (AppData\\Local\\Clipper) are removed.
 """
 import os
 import shutil
@@ -33,7 +33,7 @@ def run(silent=None):
         root.withdraw()
         ok = messagebox.askyesno(
             "Uninstall Clipper",
-            "Remove Clipper from this PC?\n\nYour reels in Videos\\Clipper are kept.",
+            "Remove Clipper from this PC?\n\nYour reels are kept.",
             icon="question")
         root.destroy()
         if not ok:
@@ -65,5 +65,5 @@ def run(silent=None):
         from tkinter import messagebox
         root = tk.Tk()
         root.withdraw()
-        messagebox.showinfo("Clipper", "Clipper has been removed. Your reels are still in Videos\\Clipper.")
+        messagebox.showinfo("Clipper", "Clipper has been removed. Your reels are still in their folder.")
         root.destroy()

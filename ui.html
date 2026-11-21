@@ -192,7 +192,7 @@ select.input{width:auto;max-width:340px;padding:9px 14px;border-radius:999px;bac
 .gate-links{display:flex;gap:16px;margin-top:18px;font-size:13px}
 .gate-links a{color:var(--mut);text-decoration:none}.gate-links a:hover{color:var(--accent)}
 .acct{margin-top:22px;font-size:12.5px;color:var(--mut);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.acct b{color:var(--text);font-weight:600}
+.acct b{color:var(--text);font-weight:600;word-break:break-all}
 .acct button{color:var(--mut);text-decoration:underline;font-size:12.5px;padding:0}
 .acct button:hover{color:var(--accent)}
 .camField[hidden]{display:none}
@@ -347,7 +347,8 @@ select.input{width:auto;max-width:340px;padding:9px 14px;border-radius:999px;bac
   </div>
 
   <details class="log"><summary>Details</summary><pre id="log"></pre></details>
-  <div class="acct" id="acct"></div>
+  <div class="acct" id="reelsDir"></div>
+  <div class="acct" id="acct" style="margin-top:8px"></div>
   <footer class="afoot">
     <div class="afoot-l"><a href="/tutorial">Tutorial</a><a href="/contact">Contact</a><a href="/privacy">Privacy</a></div>
     <a class="afoot-site" href="https://growthforge.cloud" data-ext>growthforge.cloud ↗</a>
@@ -449,6 +450,14 @@ async function poll() {
   // sign-in gate
   $('#gate').hidden = !!s.account;
   $('#acct').innerHTML = s.account ? `Signed in as <b>${esc(s.account.email)}</b> · <button id="signOut">Sign out</button>` : '';
+  const R = s.reels, rKey = R ? R.dir + R.default + R.free_gb : '';
+  if ($('#reelsDir').dataset.k !== rKey) {
+    $('#reelsDir').dataset.k = rKey;
+    $('#reelsDir').innerHTML = R ? `Reels save to <b title="${esc(R.dir)}">${esc(R.dir)}</b> <span>(${R.free_gb} GB free)</span> · <button id="chReels">Change</button>${R.default ? '' : ' · <button id="rsReels">Use default</button>'}` : '';
+    const setReels = async body => { const r = await api('/api/reels', body); if (r.ok && r.path) toast('New reels will save to ' + r.path + '. Older reels stay where they were.'); else if (!r.ok) toast(r.error); poll() };
+    const ch = $('#chReels'); if (ch) ch.onclick = () => setReels({});
+    const rs = $('#rsReels'); if (rs) rs.onclick = () => setReels({ reset: true });
+  }
   const so = $('#signOut'); if (so) so.onclick = async () => { if (!confirm('Sign out of Clipper on this PC?')) return; const r = await api('/api/signout', {}); if (!r.ok) toast(r.error); poll() };
   // live
   const L = s.live; liveOn = !!(L && L.running);

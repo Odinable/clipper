@@ -51,10 +51,8 @@ sys.stdin = None  # no console keyboard thread inside the app
 import clip as C   # noqa: E402
 import live as L   # noqa: E402
 
-OUT = C.REELS
 RES = C.RES
 os.chdir(C.DATA)
-OUT.mkdir(exist_ok=True)
 PORT = int(os.environ.get("CLIPPER_PORT", "4848"))
 
 S = {"live": None, "live_thread": None, "error": None, "rev": 0, "last_ping": time.time(),
@@ -198,8 +196,8 @@ def start_vod(p):
 
 
 def session_dir(name):
-    d = (OUT / name).resolve()
-    if OUT.resolve() not in d.parents:
+    d = (C.REELS / name).resolve()
+    if C.REELS.resolve() not in d.parents:
         raise ValueError("bad session")
     return d
 
@@ -269,7 +267,7 @@ def delete_clip(p):
 
 def sessions():
     out = []
-    for d in OUT.iterdir():
+    for d in C.REELS.iterdir():
         j = d / "highlights.json"
         if d.is_dir() and j.exists():
             try:
@@ -331,6 +329,8 @@ def state():
     v = S["vod"]
     return {"live": live, "vod": dict(v), "error": S["error"], "rev": S["rev"] + (lv.rev if lv else 0),
             "log": list(LOG.lines)[-60:], "hotkey": S["hotkey"], "nvenc": C.NVENC,
+            "reels": {"dir": str(C.REELS), "default": C.REELS == C.DEFAULT_REELS,
+                      "free_gb": round(shutil.disk_usage(C.REELS.anchor).free / 1e9, 1)},
             "account": (lambda a: {"email": a["sub"], "name": a.get("name", "")} if a else None)(account())}
 
 
@@ -343,6 +343,46 @@ def sign_out():
         pass
     bump()
     return {"ok": True}
+
+
+def pick_reels_folder(p):
+    """Choose where reels are saved (or go back to the default with {"reset": true})."""
+    if live_running() or S["vod"]["running"] or S["busy"]:
+        return {"ok": False, "error": "Wait until Clipper has finished the current stream, then change the folder."}
+    if p.get("reset"):
+        new = C.DEFAULT_REELS
+    else:
+        res = {}
+
+        def run():
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            res["path"] = filedialog.askdirectory(title="Choose where Clipper saves your reels",
+                                                  initialdir=str(C.REELS if C.REELS.exists() else Path.home()))
+            root.destroy()
+
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+        if not res.get("path"):
+            return {"ok": True, "cancelled": True}
+        new = Path(res["path"])
+        if new.name.lower() != "clipper":   # reels get a folder of their own, like the default Videos\Clipper
+            new = new / "Clipper"
+    try:
+        new.mkdir(parents=True, exist_ok=True)
+        probe = new / ".clipper-write-test"
+        probe.write_text("ok")
+        probe.unlink()
+    except OSError:
+        return {"ok": False, "error": f"Clipper can't save to {new}. Pick a folder you can write to."}
+    C.set_reels(new)
+    C.save_settings(reels_dir=None if new == C.DEFAULT_REELS else str(new))
+    bump()
+    return {"ok": True, "path": str(new)}
 
 
 def pick_file():
@@ -503,8 +543,8 @@ class H(BaseHTTPRequestHandler):
             pass
 
     def send_file(self, rel):
-        f = (OUT / rel).resolve()
-        if OUT.resolve() not in f.parents or not f.is_file():
+        f = (C.REELS / rel).resolve()
+        if C.REELS.resolve() not in f.parents or not f.is_file():
             return self.send_error(404)
         size = f.stat().st_size
         ctype = {".mp4": "video/mp4", ".jpg": "image/jpeg", ".png": "image/png", ".txt": "text/plain"}.get(f.suffix, "application/octet-stream")
@@ -553,6 +593,7 @@ class H(BaseHTTPRequestHandler):
                 "/api/recut": lambda: recut(p),
                 "/api/delete": lambda: delete_clip(p),
                 "/api/pick": pick_file,
+                "/api/reels": lambda: pick_reels_folder(p),
                 "/api/reveal": lambda: reveal(p),
                 "/api/dismiss": lambda: (S.update(error=None), {"ok": True})[-1],
                 "/api/open": lambda: open_external(p.get("url", "")),

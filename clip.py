@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 HERE = Path(__file__).resolve().parent
 NOWIN = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW: no console flashes from the app
 
@@ -48,13 +48,50 @@ def _videos_dir():
 
 if FROZEN:
     DATA = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "Clipper"
-    REELS = Path(os.environ.get("CLIPPER_REELS") or (_videos_dir() / "Clipper"))
+    DEFAULT_REELS = _videos_dir() / "Clipper"
 else:
     DATA = HERE
-    REELS = Path(os.environ.get("CLIPPER_REELS") or (HERE / "out"))
-VODS = DATA / "vods"
-for _d in (DATA, REELS):
-    _d.mkdir(parents=True, exist_ok=True)
+    DEFAULT_REELS = HERE / "out"
+DATA.mkdir(parents=True, exist_ok=True)
+SETTINGS = DATA / "settings.json"
+
+
+def load_settings():
+    try:
+        return json.loads(SETTINGS.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(**kw):
+    s = load_settings()
+    s.update(kw)
+    SETTINGS.write_text(json.dumps(s, indent=2), encoding="utf-8")
+
+
+def set_reels(path):
+    """Where reels are saved. Stream downloads (audio for finding highlights, video around each one)
+    go in a .downloads folder inside it, so a big stream never lands on another drive."""
+    global REELS, VODS
+    REELS = Path(path)
+    VODS = REELS / ".downloads"
+    REELS.mkdir(parents=True, exist_ok=True)
+
+
+def _initial_reels():
+    if os.environ.get("CLIPPER_REELS"):
+        return Path(os.environ["CLIPPER_REELS"])
+    chosen = load_settings().get("reels_dir")
+    if chosen and Path(Path(chosen).anchor).exists():   # a removed drive falls back to the default
+        return Path(chosen)
+    return DEFAULT_REELS
+
+
+REELS = VODS = None
+try:
+    set_reels(_initial_reels())
+except OSError:   # chosen folder no longer writable
+    set_reels(DEFAULT_REELS)
 
 FONT_BOLD = RES / "fonts" / "Inter-700.ttf"
 FONT_MED = RES / "fonts" / "Inter-500.ttf"
