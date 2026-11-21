@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 HERE = Path(__file__).resolve().parent
 NOWIN = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW: no console flashes from the app
 

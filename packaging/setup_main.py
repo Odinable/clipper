@@ -2,9 +2,11 @@
 
   Clipper-Setup.exe        branded install window
   Clipper-Setup.exe /S     silent install (no window), e.g. for testing
+  Clipper-Setup.exe /S /D=E:\\Apps   silent install into E:\\Apps\\Clipper
 
-Installs to %LOCALAPPDATA%\\Programs\\Clipper, adds Start-menu (and optionally desktop) shortcuts,
-and registers in Settings > Apps so it can be uninstalled normally.
+Installs to %LOCALAPPDATA%\\Programs\\Clipper by default, or the folder picked in the window (an update
+keeps the folder used last time). Adds Start-menu (and optionally desktop) shortcuts and registers in
+Settings > Apps so it can be uninstalled normally.
 """
 import os
 import subprocess
@@ -13,10 +15,10 @@ import threading
 import zipfile
 from pathlib import Path
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 APP = "Clipper"
 PUBLISHER = "Growthforge"
-INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "Programs" / APP
+DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "Programs" / APP
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Clipper"
 NOWIN = 0x08000000
 RES = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
@@ -47,13 +49,51 @@ def make_shortcut(lnk, target, workdir, icon):
                    env=env, capture_output=True, creationflags=NOWIN, check=True)
 
 
-def register(size_kb):
+def previous_dir():
+    """Where Clipper is installed now, if it is."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
+            d = Path(winreg.QueryValueEx(k, "InstallLocation")[0])
+        return d if (d / "Clipper.exe").exists() else None
+    except OSError:
+        return None
+
+
+def target_dir(chosen):
+    """Always a folder of Clipper's own: picking D:\\Games installs to D:\\Games\\Clipper, never into D:\\Games
+    itself (an update empties the install folder first, so it must never hold anything else)."""
+    p = Path(chosen).expanduser()
+    return p if p.name.lower() == APP.lower() else p / APP
+
+
+def check_target(d):
+    """Raise a plain-English error if Clipper can't (or shouldn't) go in folder d."""
+    import shutil
+    if not d.is_absolute() or len(d.parts) < 2:
+        raise RuntimeError("Pick a folder on one of your drives.")
+    if not Path(d.anchor).exists():
+        raise RuntimeError(f"Drive {d.anchor} isn't available.")
+    if d.exists() and any(d.iterdir()) and not (d / "Clipper.exe").exists():
+        raise RuntimeError(f"{d} already has other files in it. Pick a different folder.")
+    if shutil.disk_usage(d.anchor).free < 400 * 1024 * 1024:
+        raise RuntimeError(f"Drive {d.anchor} has less than 400 MB free. Pick another drive.")
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        probe = d / ".clipper-write-test"
+        probe.write_text("ok")
+        probe.unlink()
+    except OSError:
+        raise RuntimeError(f"Clipper can't write to {d}. Folders like Program Files need admin, so pick another one.")
+
+
+def register(install_dir, size_kb):
     import winreg
-    exe = INSTALL_DIR / "Clipper.exe"
+    exe = install_dir / "Clipper.exe"
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
         for name, val in {
             "DisplayName": APP, "DisplayVersion": VERSION, "Publisher": PUBLISHER,
-            "DisplayIcon": f"{exe},0", "InstallLocation": str(INSTALL_DIR),
+            "DisplayIcon": f"{exe},0", "InstallLocation": str(install_dir),
             "UninstallString": f'"{exe}" --uninstall', "QuietUninstallString": f'"{exe}" --uninstall /S',
             "URLInfoAbout": "https://growthforge.cloud/clipper", "HelpLink": "https://growthforge.cloud/clipper",
         }.items():
@@ -68,12 +108,16 @@ def close_running():
     subprocess.run(["taskkill", "/IM", "clipper-yt.exe", "/F"], capture_output=True, creationflags=NOWIN)
 
 
-def install(desktop=True, progress=lambda f, msg: None):
-    progress(0.02, "Closing Clipper if it's open…")
+def install(install_dir=None, desktop=True, progress=lambda f, msg: None):
+    import shutil
+    old = previous_dir()
+    INSTALL_DIR = Path(install_dir) if install_dir else (old or DEFAULT_DIR)
+    progress(0.02, "Checking the folder…")
+    check_target(INSTALL_DIR)
+    progress(0.03, "Closing Clipper if it's open…")
     close_running()
     progress(0.05, "Removing the old version…")
-    if INSTALL_DIR.exists():
-        import shutil
+    if (INSTALL_DIR / "Clipper.exe").exists():   # only ever empties a folder that holds Clipper
         shutil.rmtree(INSTALL_DIR, ignore_errors=True)
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -93,7 +137,10 @@ def install(desktop=True, progress=lambda f, msg: None):
     make_shortcut(start_menu, exe, INSTALL_DIR, exe)
     if desktop:
         make_shortcut(desktop_dir() / "Clipper.lnk", exe, INSTALL_DIR, exe)
-    register(total // 1024)
+    register(INSTALL_DIR, total // 1024)
+    if old and old.resolve() != INSTALL_DIR.resolve() and (old / "Clipper.exe").exists():
+        progress(0.97, "Removing the copy in the old folder…")   # moved: don't leave two copies
+        shutil.rmtree(old, ignore_errors=True)
     progress(1.0, "Done")
     return exe
 
@@ -107,7 +154,7 @@ def gui():
     root.title("Install Clipper")
     root.configure(bg=BG)
     root.resizable(False, False)
-    W, H = 520, 430
+    W, H = 560, 510
     root.geometry(f"{W}x{H}+{(root.winfo_screenwidth() - W) // 2}+{(root.winfo_screenheight() - H) // 3}")
     try:
         root.iconbitmap(str(RES / "clipper.ico"))
@@ -139,6 +186,17 @@ def gui():
                          activebackground=BG, activeforeground=TEXT, font=("Segoe UI", 10), bd=0, highlightthickness=0)
     chk.pack(anchor="w")
 
+    folder = tk.StringVar(value=str(previous_dir() or DEFAULT_DIR))
+    frow = tk.Frame(wrap, bg=BG)
+    frow.pack(anchor="w", fill="x", pady=(14, 0))
+    tk.Label(frow, text="INSTALL FOLDER", bg=BG, fg=MUT, font=("Segoe UI Semibold", 8)).pack(anchor="w")
+    fline = tk.Frame(frow, bg=CARD, highlightbackground=LINE, highlightthickness=1)
+    fline.pack(fill="x", pady=(4, 0))
+    change = tk.Label(fline, text="Change…", bg=LINE, fg=TEXT, font=("Segoe UI Semibold", 9), padx=12, pady=7, cursor="hand2")
+    change.pack(side="right")
+    tk.Label(fline, textvariable=folder, bg=CARD, fg=TEXT, font=("Segoe UI", 9), anchor="w", padx=10, pady=7
+             ).pack(side="left", fill="x", expand=True)
+
     status = tk.Label(wrap, text="", bg=BG, fg=MUT, font=("Segoe UI", 9))
     bar = ttk.Progressbar(wrap, style="C.Horizontal.TProgressbar", mode="determinate", maximum=1.0)
 
@@ -146,10 +204,24 @@ def gui():
     btn.pack(side="bottom", fill="x")
     btn.bind("<Enter>", lambda e: btn.configure(bg=EMBER))
     btn.bind("<Leave>", lambda e: btn.configure(bg=ACCENT))
-    tk.Label(wrap, text=f"Version {VERSION}  ·  Installs to {INSTALL_DIR}", bg=BG, fg="#5c5c66",
-             font=("Segoe UI", 8)).pack(side="bottom", anchor="w", pady=(0, 10))
+    tk.Label(wrap, text=f"Version {VERSION}  ·  Clipper gets its own folder inside the one you pick", bg=BG,
+             fg="#5c5c66", font=("Segoe UI", 8)).pack(side="bottom", anchor="w", pady=(0, 10))
 
     state = {"exe": None, "busy": False}
+
+    def pick_folder(_=None):
+        if state["busy"] or state["exe"]:
+            return
+        from tkinter import filedialog
+        cur = Path(folder.get())
+        start = cur.parent if cur.name.lower() == APP.lower() else cur
+        got = filedialog.askdirectory(parent=root, title="Choose where to install Clipper",
+                                      initialdir=str(start if start.exists() else Path.home()))
+        if got:
+            folder.set(str(target_dir(got)))
+            status.configure(text="")
+
+    change.bind("<Button-1>", pick_folder)
 
     def set_progress(f, msg):
         root.after(0, lambda: (bar.configure(value=f), status.configure(text=msg)))
@@ -158,14 +230,17 @@ def gui():
         state["busy"] = False
         bar.pack_forget()
         if err:
-            status.configure(text=f"Install failed: {err}", fg=ACCENT)
+            status.configure(text=f"Install failed: {err}", fg=ACCENT, wraplength=480, justify="left")
+            status.pack(anchor="w")
             btn.configure(text="Try again")
+            chk.configure(state="normal")
             return
         state["exe"] = exe
         title.configure(text="Clipper is installed")
         body.configure(text="Find it in your Start menu" + (" and on your desktop." if desk.get() else ".")
                        + "\nThe first time it opens, sign in with your name and email.")
         chk.pack_forget()
+        frow.pack_forget()
         status.configure(text="")
         btn.configure(text="Open Clipper")
 
@@ -173,18 +248,19 @@ def gui():
         if state["busy"]:
             return
         if state["exe"]:
-            subprocess.Popen([str(state["exe"])], cwd=str(INSTALL_DIR))
+            subprocess.Popen([str(state["exe"])], cwd=str(Path(state["exe"]).parent))
             root.destroy()
             return
         state["busy"] = True
         btn.configure(text="Installing…")
         chk.configure(state="disabled")
+        status.configure(fg=MUT)
         bar.pack(fill="x", pady=(18, 6))
         status.pack(anchor="w")
 
         def work():
             try:
-                exe = install(desk.get(), set_progress)
+                exe = install(folder.get(), desk.get(), set_progress)
                 root.after(0, lambda: finished(exe, None))
             except Exception as e:
                 root.after(0, lambda: finished(None, e))
@@ -199,7 +275,8 @@ def gui():
 if __name__ == "__main__":
     if "/S" in sys.argv or "--silent" in sys.argv:
         try:
-            install(desktop="--no-desktop" not in sys.argv)
+            d = next((a[3:] for a in sys.argv if a.upper().startswith("/D=")), None)
+            install(target_dir(d) if d else None, desktop="--no-desktop" not in sys.argv)
             sys.exit(0)
         except Exception as e:
             sys.stderr.write(str(e))
